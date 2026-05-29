@@ -44,6 +44,21 @@ export const server: Plugin = async (input, options?: GotifyPluginOptions): Prom
     );
   }
 
+  const getSessionTitle = async (sessionID?: string): Promise<string> => {
+    if (!sessionID) return "unknown session";
+    try {
+      const res = await input.client.session.get({
+        path: { id: sessionID },
+      });
+      if (res && res.data && (res.data as any).title) {
+        return (res.data as any).title;
+      }
+    } catch (error) {
+      console.error("[Gotify Plugin] Error fetching session details:", error);
+    }
+    return sessionID;
+  };
+
   const sendNotification = async (title: string, message: string, priority: number) => {
     if (!gotifyUrl || !gotifyToken) {
       return;
@@ -87,10 +102,11 @@ export const server: Plugin = async (input, options?: GotifyPluginOptions): Prom
       if (event.type === "session.idle") {
         const { sessionID } = event.properties;
         const projectPath = input.project?.worktree || input.directory || "unknown directory";
+        const sessionTitle = await getSessionTitle(sessionID);
 
         await sendNotification(
-          "OpenCode Execution Success",
-          `Session **${sessionID}** completed successfully in **${projectPath}** and is now idle.`,
+          `OpenCode Success: ${sessionTitle}`,
+          `Session **${sessionTitle}** completed successfully in **${projectPath}**.`,
           prioritySuccess
         );
       }
@@ -99,6 +115,7 @@ export const server: Plugin = async (input, options?: GotifyPluginOptions): Prom
       if (event.type === "session.error") {
         const { sessionID, error } = event.properties;
         const projectPath = input.project?.worktree || input.directory || "unknown directory";
+        const sessionTitle = await getSessionTitle(sessionID);
 
         let errorMessage = "Unknown error";
         if (error) {
@@ -110,8 +127,8 @@ export const server: Plugin = async (input, options?: GotifyPluginOptions): Prom
         }
 
         await sendNotification(
-          "OpenCode Execution Failure",
-          `Session **${sessionID || "unknown"}** failed in **${projectPath}**.\n\n**Error:** ${errorMessage}`,
+          `OpenCode Failure: ${sessionTitle}`,
+          `Session **${sessionTitle}** failed in **${projectPath}**.\n\n**Error:** ${errorMessage}`,
           priorityError
         );
       }
