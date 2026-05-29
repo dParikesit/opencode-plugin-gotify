@@ -1,0 +1,19 @@
+# Dependency directories
+node_modules/
+.antigravitycli/
+
+# Build outputs
+dist/
+
+# Scratch and test scripts
+scratch/
+docs/
+
+# Local configuration files
+.env
+.npmrc
+*.local
+
+# System files
+.DS_Store
+Thumbs.db

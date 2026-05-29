@@ -1,0 +1,24 @@
+{
+  "name": "opencode-plugin-gotify",
+  "version": "1.0.0",
+  "description": "An OpenCode plugin to send Gotify notifications upon execution completion",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.15.12"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0",
+    "prettier": "^3.0.0"
+  }
+}
