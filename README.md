@@ -22,9 +22,9 @@ Add this plugin to your `opencode.json` (or `opencode.config.json`):
 {
   "plugin": [
     [
-      "opencode-plugin-gotify",
+      "opencode-plugin-gotify@git+https://github.com/dParikesit/opencode-plugin-gotify.git",
       {
-        "url": "https://gotify.yourdomain.com",
+        "url": "https://gotify.homelab.dparikesit.com",
         "token": "AppTokenHere"
       }
     ]
@@ -32,7 +32,15 @@ Add this plugin to your `opencode.json` (or `opencode.config.json`):
 }
 ```
 
-Or run locally by placing it in your project's local plugin directory: `.opencode/plugins/`.
+Or pin to a specific commit / branch / tag:
+
+```json
+"opencode-plugin-gotify@git+https://github.com/dParikesit/opencode-plugin-gotify.git#main"
+```
+
+The repository's `prepare` script automatically compiles the TypeScript source to `dist/index.js` on install, so no manual build step is required on the consuming machine.
+
+Or run locally by placing the built plugin in your project's local plugin directory: `.opencode/plugins/`.
 
 ---
 
@@ -77,9 +85,9 @@ Example with custom priorities:
 {
   "plugin": [
     [
-      "opencode-plugin-gotify",
+      "opencode-plugin-gotify@git+https://github.com/dParikesit/opencode-plugin-gotify.git",
       {
-        "url": "https://gotify.yourdomain.com",
+        "url": "https://gotify.homelab.dparikesit.com",
         "token": "AppTokenHere",
         "priorityError": 10,
         "priorityQuestion": 9,
@@ -105,7 +113,7 @@ For options that you want to share across every OpenCode project without committ
 
 ```json
 {
-  "url": "https://gotify.yourdomain.com",
+  "url": "https://gotify.homelab.dparikesit.com",
   "token": "Axxxxxxxxx.xxxx",
   "prioritySuccess": 5,
   "priorityError": 8

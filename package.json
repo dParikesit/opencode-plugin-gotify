@@ -4,12 +4,12 @@
   "description": "An OpenCode plugin to send Gotify notifications upon execution completion",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jerrita/opencode-plugin-gotify.git"
+    "url": "git+https://github.com/dParikesit/opencode-plugin-gotify.git"
   },
   "bugs": {
-    "url": "https://github.com/jerrita/opencode-plugin-gotify/issues"
+    "url": "https://github.com/dParikesit/opencode-plugin-gotify/issues"
   },
-  "homepage": "https://github.com/jerrita/opencode-plugin-gotify#readme",
+  "homepage": "https://github.com/dParikesit/opencode-plugin-gotify#readme",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
