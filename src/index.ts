@@ -1,7 +1,8 @@
-import type { Plugin, Hooks } from "@opencode-ai/plugin";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
+import { Plugin } from "@opencode/plugin";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 
 export interface GotifyPluginOptions {
   url?: string;
@@ -12,219 +13,274 @@ export interface GotifyPluginOptions {
   priorityPermission?: number;
   priorityDeleted?: number;
   priorityPtyExit?: number;
+  /** @deprecated V2 does not publish worktree creation failure events. */
   priorityWorktree?: number;
+  /** @deprecated V2 does not publish MCP browser launch failure events. */
   priorityBrowser?: number;
   disabled?: boolean;
 }
 
-export const server: Plugin = async (input, options?: GotifyPluginOptions): Promise<Hooks> => {
-  let fileConfig: Partial<GotifyPluginOptions> = {};
-  try {
-    const configPath = path.join(os.homedir(), ".config", "opencode", "gotify-config.json");
-    if (fs.existsSync(configPath)) {
-      const fileContent = fs.readFileSync(configPath, "utf-8");
-      fileConfig = JSON.parse(fileContent);
-    }
-  } catch (err) {
-    console.error("[Gotify Plugin] Error reading local config file:", err);
-  }
+type OpenCodeEvent =
+  ReturnType<Plugin.Context["event"]["subscribe"]> extends AsyncIterable<infer E> ? E : never;
+type Session = Awaited<ReturnType<Plugin.Context["session"]["get"]>>;
+type SessionDetails = Pick<Session, "title" | "location">;
 
-  const gotifyUrl = options?.url || process.env.GOTIFY_URL || fileConfig.url;
-  const gotifyToken = options?.token || process.env.GOTIFY_TOKEN || fileConfig.token;
-  const disabled = options?.disabled ?? fileConfig.disabled ?? false;
+const eventTypes = [
+  "session.created",
+  "session.renamed",
+  "session.moved",
+  "session.execution.succeeded",
+  "session.execution.failed",
+  "session.deleted",
+  "form.created",
+  "permission.asked",
+  "pty.exited",
+] as const;
+type GotifyEvent = Extract<OpenCodeEvent, { type: (typeof eventTypes)[number] }>;
+const isGotifyEvent = (event: OpenCodeEvent): event is GotifyEvent =>
+  eventTypes.some((type) => type === event.type);
 
-  const prioritySuccess = options?.prioritySuccess ?? fileConfig.prioritySuccess ?? 5;
-  const priorityError = options?.priorityError ?? fileConfig.priorityError ?? 8;
-  const priorityQuestion = options?.priorityQuestion ?? fileConfig.priorityQuestion ?? 8;
-  const priorityPermission = options?.priorityPermission ?? fileConfig.priorityPermission ?? 8;
-  const priorityDeleted = options?.priorityDeleted ?? fileConfig.priorityDeleted ?? 5;
-  const priorityPtyExit = options?.priorityPtyExit ?? fileConfig.priorityPtyExit ?? 8;
-  const priorityWorktree = options?.priorityWorktree ?? fileConfig.priorityWorktree ?? 8;
-  const priorityBrowser = options?.priorityBrowser ?? fileConfig.priorityBrowser ?? 8;
-
-  if (disabled) {
-    console.log("[Gotify Plugin] Disabled by configuration.");
-    return {};
-  }
-
-  if (!gotifyUrl || !gotifyToken) {
-    console.warn(
-      "[Gotify Plugin] Warning: Gotify URL or Token is not configured. " +
-        "Please provide them via plugin options (url, token), environment variables (GOTIFY_URL, GOTIFY_TOKEN), " +
-        "or in the configuration file ~/.config/opencode/gotify-config.json."
-    );
-  } else {
-    console.log(
-      `[Gotify Plugin] Loaded v2. url=${gotifyUrl.replace(/\/\/[^/]+/, "//<redacted>")} ` +
-      `priorities: success=${prioritySuccess} error=${priorityError} question=${priorityQuestion} ` +
-      `permission=${priorityPermission} deleted=${priorityDeleted} pty=${priorityPtyExit} ` +
-      `worktree=${priorityWorktree} browser=${priorityBrowser}`
-    );
-  }
-
-  const getSessionTitle = async (sessionID?: string): Promise<string> => {
-    if (!sessionID) return "unknown session";
+export default Plugin.define({
+  id: "opencode-plugin-gotify",
+  setup(ctx) {
+    const options: GotifyPluginOptions = ctx.options;
+    let fileConfig: GotifyPluginOptions = {};
     try {
-      const res = await input.client.session.get({
-        path: { id: sessionID },
-      });
-      if (res && res.data && (res.data as any).title) {
-        return (res.data as any).title;
+      const configPath = path.join(os.homedir(), ".config", "opencode", "gotify-config.json");
+      if (fs.existsSync(configPath)) {
+        fileConfig = JSON.parse(fs.readFileSync(configPath, "utf-8")) ?? {};
       }
-    } catch (error) {
-      console.error("[Gotify Plugin] Error fetching session details:", error);
+    } catch (err) {
+      console.error("[Gotify Plugin] Error reading local config file:", err);
     }
-    return sessionID;
-  };
 
-  const projectPath = () => input.project?.worktree || input.directory || "unknown directory";
+    const gotifyUrl = options.url || process.env.GOTIFY_URL || fileConfig.url;
+    const gotifyToken = options.token || process.env.GOTIFY_TOKEN || fileConfig.token;
+    const disabled = options.disabled ?? fileConfig.disabled ?? false;
+    const prioritySuccess = options.prioritySuccess ?? fileConfig.prioritySuccess ?? 5;
+    const priorityError = options.priorityError ?? fileConfig.priorityError ?? 8;
+    const priorityQuestion = options.priorityQuestion ?? fileConfig.priorityQuestion ?? 8;
+    const priorityPermission = options.priorityPermission ?? fileConfig.priorityPermission ?? 8;
+    const priorityDeleted = options.priorityDeleted ?? fileConfig.priorityDeleted ?? 5;
+    const priorityPtyExit = options.priorityPtyExit ?? fileConfig.priorityPtyExit ?? 8;
 
-  const sendNotification = async (title: string, message: string, priority: number) => {
-    if (!gotifyUrl || !gotifyToken) {
+    if (disabled) {
+      console.log("[Gotify Plugin] Disabled by configuration.");
       return;
     }
-    try {
-      const baseUrl = gotifyUrl.endsWith("/") ? gotifyUrl.slice(0, -1) : gotifyUrl;
-      const url = `${baseUrl}/message?token=${gotifyToken}`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title,
-          message,
-          priority,
-          extras: { "client::display": { contentType: "text/markdown" } },
-        }),
-      });
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "");
-        console.error(
-          `[Gotify Plugin] Failed to send notification. Gotify returned status ${response.status}: ${errorText}`
-        );
-      }
-    } catch (error) {
-      console.error("[Gotify Plugin] Error sending notification to Gotify:", error);
+    if (!gotifyUrl || !gotifyToken) {
+      console.warn(
+        "[Gotify Plugin] Gotify URL or Token is not configured. " +
+          "Provide plugin options (url, token), environment variables (GOTIFY_URL, GOTIFY_TOKEN), " +
+          "or ~/.config/opencode/gotify-config.json."
+      );
+      return;
     }
-  };
 
-  const extractError = (error: unknown): string => {
-    if (!error) return "Unknown error";
-    if (typeof error === "string") return error;
-    if (typeof error === "object") {
-      return (error as any).message || JSON.stringify(error);
-    }
-    return String(error);
-  };
+    console.log("[Gotify Plugin] Loaded for OpenCode V2.");
+    const controller = new AbortController();
+    const sessions = new Map<string, SessionDetails>();
+    const isLocal = (location: Session["location"]) =>
+      location.directory === ctx.location.directory &&
+      location.workspaceID === ctx.location.workspaceID;
 
-  return {
-    event: async ({ event }) => {
-      const ev = event as { type: string; properties: any };
-      // ---- High priority (8) ----
-
-      if (ev.type === "session.error") {
-        const { sessionID, error } = ev.properties as { sessionID?: string; error?: unknown };
-        const title = await getSessionTitle(sessionID);
-        const errorMessage = extractError(error);
-        await sendNotification(
-          `OpenCode Failure: ${title}`,
-          `Session **${title}** failed in **${projectPath()}**.\n\n**Error:** ${errorMessage}`,
-          priorityError
+    const getSession = async (sessionID: string): Promise<SessionDetails | undefined> => {
+      try {
+        const session = await ctx.session.get(
+          { sessionID },
+          { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) }
         );
-        return;
+        if (isLocal(session.location)) sessions.set(sessionID, session);
+        return session;
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.error("[Gotify Plugin] Error fetching session details:", error);
+        }
+        return sessions.get(sessionID);
       }
+    };
 
-      if (ev.type === "worktree.failed") {
-        const { message } = ev.properties as { message: string };
-        await sendNotification(
-          "OpenCode Worktree Failed",
-          `Worktree creation failed in **${projectPath()}**.\n\n**Error:** ${message}`,
-          priorityWorktree
-        );
-        return;
-      }
-
-      if (ev.type === "mcp.browser.open.failed") {
-        const { mcpName, url } = ev.properties as { mcpName: string; url: string };
-        await sendNotification(
-          "OpenCode Browser Open Failed",
-          `MCP server **${mcpName}** failed to open URL: \`${url}\``,
-          priorityBrowser
-        );
-        return;
-      }
-
-      if (ev.type === "pty.exited") {
-        const { id, exitCode } = ev.properties as { id: string; exitCode: number };
-        const status = exitCode === 0 ? "cleanly" : `with non-zero exit code **${exitCode}**`;
-        await sendNotification(
-          "OpenCode PTY Exited",
-          `PTY \`${id}\` exited ${status} in **${projectPath()}**.`,
-          priorityPtyExit
-        );
-        return;
-      }
-
-      // ---- Medium priority (5) ----
-
-      if (ev.type === "session.idle") {
-        const { sessionID } = ev.properties as { sessionID: string };
-        const title = await getSessionTitle(sessionID);
-        await sendNotification(
-          `OpenCode Success: ${title}`,
-          `Session **${title}** completed successfully in **${projectPath()}**.`,
-          prioritySuccess
-        );
-        return;
-      }
-
-      if (ev.type === "question.asked") {
-        const { sessionID, questions } = ev.properties as {
-          sessionID: string;
-          questions: Array<{ question: string; header?: string; options?: Array<{ label: string; description?: string }> }>;
-        };
-        const title = await getSessionTitle(sessionID);
-        const lines = (questions || []).map((q, i) => {
-          const opts = (q.options || [])
-            .map((o) => `  - **${o.label}**${o.description ? ` — ${o.description}` : ""}`)
-            .join("\n");
-          return `**${i + 1}. ${q.header || q.question}**\n${q.question}${opts ? "\n" + opts : ""}`;
+    const sendNotification = async (title: string, message: string, priority: number) => {
+      try {
+        const baseUrl = gotifyUrl.replace(/\/+$/, "");
+        const url = `${baseUrl}/message?token=${encodeURIComponent(gotifyToken)}`;
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
+          body: JSON.stringify({
+            title,
+            message,
+            priority,
+            extras: { "client::display": { contentType: "text/markdown" } },
+          }),
         });
-        await sendNotification(
-          `OpenCode Question: ${title}`,
-          `Session **${title}** is asking for input in **${projectPath()}**.\n\n${lines.join("\n\n")}`,
-          priorityQuestion
-        );
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "");
+          console.error(
+            `[Gotify Plugin] Failed to send notification. Gotify returned status ${response.status}: ${errorText}`
+          );
+        } else {
+          await response.body?.cancel();
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.error("[Gotify Plugin] Error sending notification to Gotify:", error);
+        }
+      }
+    };
+
+    const handleEvent = async (event: GotifyEvent) => {
+      if (controller.signal.aborted) return;
+
+      // The public stream covers all locations, including other plugin instances.
+      if (event.type === "session.moved") {
+        const cached = sessions.get(event.data.sessionID);
+        if (!isLocal(event.data.location)) sessions.delete(event.data.sessionID);
+        else if (cached) cached.location = event.data.location;
+        return;
+      }
+      if (event.location && !isLocal(event.location)) return;
+      if (event.type === "session.created") {
+        if (isLocal(event.data.location)) {
+          sessions.set(event.data.sessionID, {
+            title: event.data.title,
+            location: event.data.location,
+          });
+        }
+        return;
+      }
+      if (event.type === "session.renamed") {
+        const session =
+          sessions.get(event.data.sessionID) ?? (await getSession(event.data.sessionID));
+        if (session && isLocal(session.location)) {
+          sessions.set(event.data.sessionID, { ...session, title: event.data.title });
+        }
         return;
       }
 
-      if (ev.type === "permission.asked") {
-        const { sessionID, permission, patterns } = ev.properties as {
-          sessionID: string;
-          permission: string;
-          patterns: Array<string>;
-        };
-        const title = await getSessionTitle(sessionID);
-        const pats = (patterns && patterns.length > 0) ? `\n\n**Patterns:**\n${patterns.map((p) => `  - \`${p}\``).join("\n")}` : "";
-        await sendNotification(
-          `OpenCode Permission: ${title}`,
-          `Session **${title}** needs permission for **${permission}** in **${projectPath()}**.${pats}`,
-          priorityPermission
-        );
-        return;
-      }
+      const sessionID =
+        event.type === "form.created"
+          ? event.data.form.sessionID
+          : "sessionID" in event.data
+            ? event.data.sessionID
+            : undefined;
+      // Deleted sessions can no longer be fetched; retain titles observed while loaded.
+      const session = sessionID?.startsWith("ses")
+        ? event.type === "session.deleted"
+          ? sessions.get(sessionID)
+          : await getSession(sessionID)
+        : undefined;
+      const location = event.location ?? session?.location;
+      if (event.type === "session.deleted") sessions.delete(event.data.sessionID);
+      if (!location || !isLocal(location) || controller.signal.aborted) return;
+      const title = session?.title || sessionID || "unknown session";
+      const directory = location.directory;
 
-      if (ev.type === "session.deleted") {
-        const { info } = ev.properties as { info: { id: string; title?: string } };
-        const title = info?.title || info?.id || "unknown session";
-        await sendNotification(
-          `OpenCode Session Deleted: ${title}`,
-          `Session **${title}** was deleted in **${projectPath()}**.`,
-          priorityDeleted
-        );
-        return;
+      switch (event.type) {
+        case "session.execution.failed":
+          await sendNotification(
+            `OpenCode Failure: ${title}`,
+            `Session **${title}** failed in **${directory}**.\n\n**Error:** ${event.data.error.message}`,
+            priorityError
+          );
+          break;
+        case "session.execution.succeeded":
+          await sendNotification(
+            `OpenCode Success: ${title}`,
+            `Session **${title}** completed successfully in **${directory}**.`,
+            prioritySuccess
+          );
+          break;
+        case "pty.exited": {
+          const { id, exitCode } = event.data;
+          const status = exitCode === 0 ? "cleanly" : `with non-zero exit code **${exitCode}**`;
+          await sendNotification(
+            "OpenCode PTY Exited",
+            `PTY \`${id}\` exited ${status} in **${directory}**.`,
+            priorityPtyExit
+          );
+          break;
+        }
+        case "form.created": {
+          const { form } = event.data;
+          const lines = form.fields.map((field, i) => {
+            const choices = "options" in field ? field.options : undefined;
+            const opts = (choices ?? [])
+              .map(
+                (option) =>
+                  `  - **${option.label}**${option.description ? ` — ${option.description}` : ""}`
+              )
+              .join("\n");
+            return (
+              `**${i + 1}. ${field.title || field.key}**` +
+              (field.description ? `\n${field.description}` : "") +
+              (field.type === "external" ? `\n${field.url}` : "") +
+              (opts ? `\n${opts}` : "")
+            );
+          });
+          await sendNotification(
+            `OpenCode Question: ${title}`,
+            `Session **${title}** is asking for input in **${directory}**.\n\n**${form.title}**\n\n${lines.join("\n\n")}`,
+            priorityQuestion
+          );
+          break;
+        }
+        case "permission.asked": {
+          const { action, resources, message } = event.data;
+          const details = resources.length
+            ? `\n\n**Resources:**\n${resources.map((resource) => `  - \`${resource}\``).join("\n")}`
+            : "";
+          await sendNotification(
+            `OpenCode Permission: ${title}`,
+            `Session **${title}** needs permission for **${action}** in **${directory}**.${details}${message ? `\n\n${message}` : ""}`,
+            priorityPermission
+          );
+          break;
+        }
+        case "session.deleted":
+          await sendNotification(
+            `OpenCode Session Deleted: ${title}`,
+            `Session **${title}** was deleted in **${directory}**.`,
+            priorityDeleted
+          );
+          break;
       }
-    },
-  };
-};
+    };
 
-export default server;
+    // Buffer relevant events so Gotify's network latency cannot stall the shared stream.
+    let pending = Promise.resolve();
+    const subscription = (async () => {
+      while (!controller.signal.aborted) {
+        try {
+          for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+            if (controller.signal.aborted) break;
+            if (!isGotifyEvent(event)) continue;
+            pending = pending
+              .then(() => handleEvent(event))
+              .catch((error) => {
+                if (!controller.signal.aborted) {
+                  console.error("[Gotify Plugin] Error handling event:", error);
+                }
+              });
+          }
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            console.error("[Gotify Plugin] Event subscription failed:", error);
+          }
+        }
+        // V2 subscriptions are live-only and do not reconnect automatically.
+        if (!controller.signal.aborted) {
+          await delay(1_000, undefined, { signal: controller.signal }).catch(() => {});
+        }
+      }
+    })();
+
+    return async () => {
+      controller.abort();
+      await subscription;
+      await pending;
+      sessions.clear();
+    };
+  },
+});
