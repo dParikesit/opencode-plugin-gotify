@@ -23,7 +23,7 @@ export interface GotifyPluginOptions {
 type OpenCodeEvent =
   ReturnType<Plugin.Context["event"]["subscribe"]> extends AsyncIterable<infer E> ? E : never;
 type Session = Awaited<ReturnType<Plugin.Context["session"]["get"]>>;
-type SessionDetails = Pick<Session, "title" | "location">;
+type SessionDetails = Pick<Session, "title" | "location" | "parentID">;
 
 const eventTypes = [
   "session.created",
@@ -146,6 +146,7 @@ export default Plugin.define({
           sessions.set(event.data.sessionID, {
             title: event.data.title,
             location: event.data.location,
+            parentID: event.data.parentID,
           });
         }
         return;
@@ -186,6 +187,7 @@ export default Plugin.define({
           );
           break;
         case "session.execution.succeeded":
+          if (session?.parentID) break;
           await sendNotification(
             `OpenCode Success: ${title}`,
             `Session **${title}** completed successfully in **${directory}**.`,

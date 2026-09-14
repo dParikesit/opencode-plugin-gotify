@@ -145,6 +145,60 @@ test("V2 definition reports terminal outcomes without idle/interruption duplicat
   assert.equal(success.body.extras["client::display"].contentType, "text/markdown");
 });
 
+test("success alerts skip subagents and nested subagents while main successes and child failures notify", async (t) => {
+  const parents = { ses_child: "ses_main", ses_nested: "ses_child" };
+  const h = await harness(t, {
+    getSession: ({ sessionID }) => ({
+      title: sessionID,
+      location,
+      parentID: parents[sessionID],
+    }),
+  });
+  for (const sessionID of ["ses_child", "ses_nested", "ses_main"]) {
+    h.emit(event("session.execution.succeeded", { sessionID }));
+  }
+  h.emit(
+    event("session.execution.failed", {
+      sessionID: "ses_child",
+      error: { type: "provider.error", message: "Subagent failed" },
+    })
+  );
+  await h.drain();
+  assert.deepEqual(
+    h.notifications.map(({ body }) => [body.title, body.priority]),
+    [
+      ["OpenCode Success: ses_main", 5],
+      ["OpenCode Failure: ses_child", 8],
+    ]
+  );
+});
+
+test("cached parent IDs suppress subagent successes after renames and failed lookups", async (t) => {
+  for (const source of ["session.created", "session.get"]) {
+    await t.test(source, async (t) => {
+      let lookups = 0;
+      const child = { title: "Child", location, parentID: "ses_main" };
+      const h = await harness(t, {
+        getSession: () => {
+          if (++lookups === 1 && source === "session.get") return child;
+          throw new Error("Session unavailable");
+        },
+      });
+      if (source === "session.created") {
+        h.emit(event("session.created", { sessionID: "ses_child", ...child }));
+      } else {
+        h.emit(event("session.execution.succeeded", { sessionID: "ses_child" }));
+      }
+      h.emit(event("session.renamed", { sessionID: "ses_child", title: "Renamed child" }));
+      h.emit(event("session.execution.succeeded", { sessionID: "ses_child" }));
+      await h.drain();
+      assert.equal(h.notifications.length, 0);
+      assert.equal(h.errors.length, 1);
+      assert.match(h.errors[0][0], /Error fetching session details/);
+    });
+  }
+});
+
 test("V2 forms render choices, free-form fields, and external links", async (t) => {
   const h = await harness(t, { options: { priorityQuestion: 9 } });
   h.emit(

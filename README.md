@@ -6,7 +6,7 @@ Version 2 of this plugin uses `@opencode/plugin` and the V2 plugin API. OpenCode
 
 ## Features
 
-- **Success and failure alerts** for OpenCode sessions (`session.execution.succeeded`, `session.execution.failed`).
+- **Success and failure alerts** for OpenCode sessions (`session.execution.succeeded`, `session.execution.failed`), with success alerts limited to top-level sessions to avoid subagent noise.
 - **Interactive prompt alerts** at high priority for questions/forms and tool permissions (`form.created`, `permission.asked`).
 - **PTY exit alerts** with exit codes (`pty.exited`).
 - **Session lifecycle alerts** for deletions (`session.deleted`).
@@ -68,7 +68,7 @@ All priorities default to the values below. Every priority is overridable via th
 | `form.created` | **8** | `OpenCode Question: <session>` | OpenCode requests input through a form, including questions, choices, and external links. |
 | `permission.asked` | **8** | `OpenCode Permission: <session>` | OpenCode blocks to request tool permission from the user. |
 | `session.deleted` | 5 | `OpenCode Session Deleted: <session>` | A session is deleted. |
-| `session.execution.succeeded` | 5 | `OpenCode Success: <session>` | An execution finishes successfully. |
+| `session.execution.succeeded` | 5 | `OpenCode Success: <session>` | A top-level session execution finishes successfully. Subagent sessions (those with a `parentID`) are skipped. |
 
 `form.created` and `permission.asked` default to **8** because they request user attention. Permission alerts include V2's action, resources, and any explanation.
 
